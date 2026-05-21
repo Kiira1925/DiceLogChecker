@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useRef } from 'react';
-import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
+import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, BarChart, Bar, XAxis, YAxis } from 'recharts';
 import { toPng, toBlob } from 'html-to-image';
 import './App.css';
 
@@ -97,8 +97,19 @@ const ExportControls = ({ cardRef, fileName }: { cardRef: React.RefObject<HTMLDi
   );
 };
 
-const StatCard = ({ charName, stat, isTotal = false }: { charName: string, stat: DiceResult, isTotal?: boolean }) => {
+const StatCard = ({
+  charName,
+  stat,
+  entries,
+  isTotal = false
+}: {
+  charName: string;
+  stat: DiceResult;
+  entries: LogEntry[];
+  isTotal?: boolean;
+}) => {
   const cardRef = useRef<HTMLDivElement>(null);
+  const [chartType, setChartType] = useState<'pie' | 'bar'>('pie');
 
   const totalSuccess = stat.critical + stat.extreme + stat.hard + stat.regular;
   const totalFailure = stat.failure + stat.fumble;
@@ -114,6 +125,34 @@ const StatCard = ({ charName, stat, isTotal = false }: { charName: string, stat:
     { name: 'ファンブル', value: stat.fumble, color: '#f87171' },
   ].filter(d => d.value > 0);
 
+  // 1d100の出目分布を集計 (1-10, 11-20, ..., 91-100)
+  const bins = [
+    { name: '1-10', shortName: '1-10', value: 0 },
+    { name: '11-20', shortName: '11-20', value: 0 },
+    { name: '21-30', shortName: '21-30', value: 0 },
+    { name: '31-40', shortName: '31-40', value: 0 },
+    { name: '41-50', shortName: '41-50', value: 0 },
+    { name: '51-60', shortName: '51-60', value: 0 },
+    { name: '61-70', shortName: '61-70', value: 0 },
+    { name: '71-80', shortName: '71-80', value: 0 },
+    { name: '81-90', shortName: '81-90', value: 0 },
+    { name: '91-100', shortName: '91-100', value: 0 },
+  ];
+
+  if (entries) {
+    entries.forEach(entry => {
+      if (entry.rollValue) {
+        const values = entry.rollValue.split(/[\s,]+/).map(v => parseInt(v, 10));
+        values.forEach(val => {
+          if (!isNaN(val) && val >= 1 && val <= 100) {
+            const binIndex = Math.min(Math.floor((val - 1) / 10), 9);
+            bins[binIndex].value++;
+          }
+        });
+      }
+    });
+  }
+
   return (
     <div ref={cardRef} className={`stat-card ${isTotal ? 'total-card' : ''}`}>
       <div className="card-header">
@@ -123,27 +162,54 @@ const StatCard = ({ charName, stat, isTotal = false }: { charName: string, stat:
 
       <div className="card-body">
         <div className="chart-section">
+          {/* グラフ切り替えトグル */}
+          <div className="chart-type-toggle">
+            <button
+              className={`chart-toggle-btn ${chartType === 'pie' ? 'active' : ''}`}
+              onClick={() => setChartType('pie')}
+            >
+              円グラフ
+            </button>
+            <button
+              className={`chart-toggle-btn ${chartType === 'bar' ? 'active' : ''}`}
+              onClick={() => setChartType('bar')}
+            >
+              出目分布
+            </button>
+          </div>
+
           <div className="chart-container">
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Tooltip content={<CustomTooltip />} />
-                <Pie
-                  data={pieData}
-                  cx="50%"
-                  cy="50%"
-                  innerRadius={40}
-                  outerRadius={70}
-                  paddingAngle={3}
-                  dataKey="value"
-                  stroke="none"
-                  isAnimationActive={false}
-                >
-                  {pieData.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={entry.color} />
-                  ))}
-                </Pie>
-              </PieChart>
-            </ResponsiveContainer>
+            {chartType === 'pie' ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Tooltip content={<CustomTooltip />} />
+                  <Pie
+                    data={pieData}
+                    cx="50%"
+                    cy="50%"
+                    innerRadius={40}
+                    outerRadius={70}
+                    paddingAngle={3}
+                    dataKey="value"
+                    stroke="none"
+                    isAnimationActive={false}
+                  >
+                    {pieData.map((entry, index) => (
+                      <Cell key={`cell-${index}`} fill={entry.color} />
+                    ))}
+                  </Pie>
+                </PieChart>
+              </ResponsiveContainer>
+            ) : (
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={bins} margin={{ top: 10, right: 5, left: -25, bottom: 0 }}>
+                  <XAxis dataKey="shortName" tick={{ fill: 'var(--text-secondary)', fontSize: 8 }} axisLine={false} tickLine={false} />
+                  <YAxis tick={{ fill: 'var(--text-secondary)', fontSize: 8 }} axisLine={false} tickLine={false} allowDecimals={false} />
+                  <Tooltip content={<CustomTooltip />} />
+                  <Bar dataKey="value" fill="#60a5fa" radius={[3, 3, 0, 0]} isAnimationActive={false} />
+                </BarChart>
+              </ResponsiveContainer>
+            )}
           </div>
 
           <div className="summary-stats">
@@ -592,15 +658,17 @@ function App() {
       totalStats.sanFailure += stat.sanFailure;
     });
 
+    const activeEntries = activeStats.flatMap(([charName]) => charLogs[charName] || []);
+
     return (
       <div className="dashboard">
         <div className="total-section">
-          <StatCard charName="Total Overview" stat={totalStats} isTotal={true} />
+          <StatCard charName="Total Overview" stat={totalStats} entries={activeEntries} isTotal={true} />
         </div>
 
         <ScrollContainer>
           {activeStats.map(([charName, stat]) =>
-            <StatCard key={charName} charName={charName} stat={stat} isTotal={false} />
+            <StatCard key={charName} charName={charName} stat={stat} entries={charLogs[charName] || []} isTotal={false} />
           )}
         </ScrollContainer>
       </div>

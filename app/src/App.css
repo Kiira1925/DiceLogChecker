@@ -782,3 +782,40 @@ header {
   font-size: 0.8rem;
   font-weight: 300;
 }
+
+/* Chart Type Toggle */
+.chart-type-toggle {
+  display: flex;
+  background: rgba(0, 0, 0, 0.25);
+  padding: 0.15rem;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  margin-bottom: 0.6rem;
+  width: fit-content;
+}
+
+.chart-toggle-btn {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-secondary);
+  padding: 0.25rem 0.8rem;
+  font-size: 0.75rem;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  font-weight: 300;
+  outline: none;
+}
+
+.chart-toggle-btn:hover {
+  color: var(--text-primary);
+}
+
+.chart-toggle-btn.active {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-primary);
+  font-weight: 400;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
