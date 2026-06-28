@@ -547,7 +547,7 @@ function App() {
               if (skillMatch && skillMatch[1]) {
                 const skillName = skillMatch[1];
                 const upperSkill = skillName.toUpperCase();
-                const excludedSkills = ['正気度ロール', 'STR', 'CON', 'POW', 'DEX', 'APP', 'INT', 'EDU', '幸運', 'アイデア', '知識'];
+                const excludedSkills = ['正気度ロール', 'STR', 'CON', 'POW', 'DEX', 'APP', 'INT', 'EDU', '幸運', 'アイデア', '知識', 'クトゥルフ神話', '信用'];
                 if (!excludedSkills.includes(upperSkill) && !(excludeModified && isModifiedRoll)) {
                   newGrowth[charName].add(skillName);
                 }
