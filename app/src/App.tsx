@@ -2,12 +2,13 @@ import React, { useRef, useState } from 'react';
 import { Bar, BarChart, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { toBlob, toPng } from 'html-to-image';
 import { parseDiceLog } from './logParser';
-import type { CharLogs, DiceResult, GrowthStats, LogEntry, UserStats } from './types';
+import type { CharLogs, DiceResult, GrowthStats, LogEntry, SanChange, SanHistory, UserStats } from './types';
 import './App.css';
 
 type ActiveTab = 'stats' | 'growth' | 'log';
 type ChartType = 'pie' | 'bar';
 type CopyStatus = 'idle' | 'success' | 'error';
+type SortDirection = 'asc' | 'desc';
 
 const RESULT_COLORS = {
   'クリティカル': '#fbbf24',
@@ -27,6 +28,9 @@ const RESULT_LABELS = [
   { label: '失敗', key: 'failure', className: 'failure', color: '#94a3b8' },
   { label: 'ファンブル', key: 'fumble', className: 'fumble', color: '#f87171' },
 ] as const;
+
+type ResultKey = (typeof RESULT_LABELS)[number]['key'];
+type CharacterSortKey = 'character' | 'rolls' | ResultKey;
 
 const calculatePercentage = (count: number, total: number) => {
   if (total === 0) return '0.0%';
@@ -58,6 +62,25 @@ const getRoomName = (name: string | null) => {
   const match = name.match(/^(.*)\[.*\]\.html$/i) ?? name.match(/^(.*)\.html$/i);
   return match ? match[1] : name;
 };
+
+const emptyDiceResult: DiceResult = {
+  critical: 0,
+  extreme: 0,
+  hard: 0,
+  regular: 0,
+  failure: 0,
+  fumble: 0,
+  sanSuccess: 0,
+  sanFailure: 0,
+};
+
+const getNormalRollTotal = (stat: DiceResult) => stat.critical + stat.extreme + stat.hard + stat.regular + stat.failure + stat.fumble;
+const getResultRate = (stat: DiceResult, key: ResultKey) => {
+  const total = getNormalRollTotal(stat);
+  return total === 0 ? 0 : stat[key] / total;
+};
+const sortCharacterNamesByRollCount = (characterNames: string[], stats: UserStats) =>
+  [...characterNames].sort((a, b) => getNormalRollTotal(stats[b] ?? emptyDiceResult) - getNormalRollTotal(stats[a] ?? emptyDiceResult) || a.localeCompare(b, 'ja'));
 
 const CustomTooltip = ({
   active,
@@ -134,11 +157,13 @@ const StatCard = ({
   charName,
   stat,
   entries,
+  sanHistory = [],
   isTotal = false,
 }: {
   charName: string;
   stat: DiceResult;
   entries: LogEntry[];
+  sanHistory?: SanChange[];
   isTotal?: boolean;
 }) => {
   const cardRef = useRef<HTMLDivElement>(null);
@@ -148,6 +173,9 @@ const StatCard = ({
   const totalFailure = stat.failure + stat.fumble;
   const totalNormalRolls = totalSuccess + totalFailure;
   const totalSanRolls = stat.sanSuccess + stat.sanFailure;
+  const sanStart = sanHistory[0]?.from;
+  const sanEnd = sanHistory.at(-1)?.to;
+  const sanChange = sanStart === undefined || sanEnd === undefined ? undefined : sanEnd - sanStart;
   const rollBins = createRollBins(entries);
   const pieData = RESULT_LABELS.map(({ label, key, color }) => ({
     name: label,
@@ -211,6 +239,12 @@ const StatCard = ({
             <div className="summary-item">
               <span className="summary-label">Success</span>
               <span className="summary-value success">{calculatePercentage(totalSuccess, totalNormalRolls)}</span>
+              {sanChange !== undefined && (
+                <div className={`san-summary ${sanChange < 0 ? 'loss' : sanChange > 0 ? 'recovery' : 'neutral'}`} aria-label={`SAN ${sanStart} から ${sanEnd}、${sanChange < 0 ? `${Math.abs(sanChange)} 減少` : sanChange > 0 ? `${sanChange} 回復` : '変化なし'}`}>
+                  <span>{sanStart} → {sanEnd}</span>
+                  <strong>{sanChange < 0 ? `総SAN減少 -${Math.abs(sanChange)}` : sanChange > 0 ? `総SAN回復 +${sanChange}` : 'SAN変化 0'}</strong>
+                </div>
+              )}
             </div>
             <div className="summary-item">
               <span className="summary-label">Failure</span>
@@ -332,6 +366,7 @@ function App() {
   const [stats, setStats] = useState<UserStats>({});
   const [growthStats, setGrowthStats] = useState<GrowthStats>({});
   const [charLogs, setCharLogs] = useState<CharLogs>({});
+  const [sanHistory, setSanHistory] = useState<SanHistory>({});
   const [isDragging, setIsDragging] = useState(false);
   const [fileName, setFileName] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<ActiveTab>('stats');
@@ -339,6 +374,8 @@ function App() {
   const [excludedTabs, setExcludedTabs] = useState<Set<string>>(new Set());
   const [excludeModifiedRolls, setExcludeModifiedRolls] = useState(true);
   const [excludedCharacters, setExcludedCharacters] = useState<Set<string>>(new Set());
+  const [selectedCharacter, setSelectedCharacter] = useState<string | null>(null);
+  const [characterSort, setCharacterSort] = useState<{ key: CharacterSortKey; direction: SortDirection }>({ key: 'rolls', direction: 'desc' });
 
   const applyAnalysis = (html: string, nextExcludedTabs = excludedTabs, nextExcludeModifiedRolls = excludeModifiedRolls) => {
     const parsed = parseDiceLog(html, {
@@ -349,7 +386,9 @@ function App() {
     setStats(parsed.stats);
     setGrowthStats(parsed.growthStats);
     setCharLogs(parsed.charLogs);
+    setSanHistory(parsed.sanHistory);
     setAvailableTabs(parsed.availableTabs);
+    setSelectedCharacter((current) => (current && parsed.stats[current] ? current : Object.keys(parsed.stats).sort()[0] ?? null));
   };
 
   const resetApp = () => {
@@ -357,12 +396,14 @@ function App() {
     setStats({});
     setGrowthStats({});
     setCharLogs({});
+    setSanHistory({});
     setFileName(null);
     setActiveTab('stats');
     setAvailableTabs([]);
     setExcludedTabs(new Set());
     setExcludeModifiedRolls(true);
     setExcludedCharacters(new Set());
+    setSelectedCharacter(null);
   };
 
   const toggleCharacterFilter = (charName: string) => {
@@ -374,6 +415,16 @@ function App() {
         next.add(charName);
       }
       return next;
+    });
+  };
+
+  const changeCharacterSort = (key: CharacterSortKey) => {
+    setCharacterSort((current) => {
+      if (current.key === key) {
+        return { key, direction: current.direction === 'desc' ? 'asc' : 'desc' };
+      }
+
+      return { key, direction: key === 'character' ? 'asc' : 'desc' };
     });
   };
 
@@ -410,6 +461,24 @@ function App() {
   };
 
   const activeStats = Object.entries(stats).filter(([charName]) => !excludedCharacters.has(charName));
+  const sortedCharacterNames = sortCharacterNamesByRollCount(Object.keys(stats), stats);
+  const sortedActiveStats = [...activeStats].sort(([nameA, statA], [nameB, statB]) => {
+    const direction = characterSort.direction === 'asc' ? 1 : -1;
+    let comparison: number;
+
+    if (characterSort.key === 'character') {
+      comparison = nameA.localeCompare(nameB, 'ja');
+    } else if (characterSort.key === 'rolls') {
+      comparison = getNormalRollTotal(statA) - getNormalRollTotal(statB);
+    } else {
+      comparison = getResultRate(statA, characterSort.key) - getResultRate(statB, characterSort.key);
+      if (comparison === 0) {
+        comparison = statA[characterSort.key] - statB[characterSort.key];
+      }
+    }
+
+    return comparison * direction || getNormalRollTotal(statB) - getNormalRollTotal(statA) || nameA.localeCompare(nameB, 'ja');
+  });
   const hasStats = Object.keys(stats).length > 0;
 
   const renderStatsDashboard = () => {
@@ -424,29 +493,145 @@ function App() {
         sanSuccess: total.sanSuccess + stat.sanSuccess,
         sanFailure: total.sanFailure + stat.sanFailure,
       }),
-      {
-        critical: 0,
-        extreme: 0,
-        hard: 0,
-        regular: 0,
-        failure: 0,
-        fumble: 0,
-        sanSuccess: 0,
-        sanFailure: 0,
-      },
+      emptyDiceResult,
     );
+    const totalRolls = getNormalRollTotal(totalStats);
+    const totalPieData = RESULT_LABELS.map(({ label, key, color }) => ({
+      name: label,
+      value: totalStats[key],
+      color,
+      key,
+    })).filter((entry) => entry.value > 0);
+    const totalSuccess = totalStats.critical + totalStats.extreme + totalStats.hard + totalStats.regular;
+    const totalFailure = totalStats.failure + totalStats.fumble;
+    const totalSanRolls = totalStats.sanSuccess + totalStats.sanFailure;
+    const selectedEntry = sortedActiveStats.find(([charName]) => charName === selectedCharacter) ?? sortedActiveStats[0];
 
     return (
-      <div className="dashboard">
-        <div className="total-section">
-          <StatCard charName="Total Overview" stat={totalStats} entries={activeStats.flatMap(([charName]) => charLogs[charName] ?? [])} isTotal />
+      <div className="dashboard list-dashboard">
+        <div className="total-overview">
+          <div className="total-chart-metric" aria-label="全体の判定結果内訳">
+            <div className="total-chart">
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie data={totalPieData} cx="50%" cy="50%" innerRadius={40} outerRadius={56} paddingAngle={3} dataKey="value" stroke="none" isAnimationActive={false}>
+                    {totalPieData.map((entry) => (
+                      <Cell key={entry.name} fill={entry.color} />
+                    ))}
+                  </Pie>
+                </PieChart>
+              </ResponsiveContainer>
+              <div className="total-chart-center">
+                <strong>{totalRolls}</strong>
+                <span>Rolls</span>
+              </div>
+            </div>
+            <div className="total-chart-legend">
+              {RESULT_LABELS.map(({ label, key, color }) => (
+                <div key={key} className="total-legend-item">
+                  <span className="total-legend-label"><i style={{ backgroundColor: color }} />{label}</span>
+                  <span>{totalStats[key]} / {calculatePercentage(totalStats[key], totalRolls)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="total-result-rates" aria-label="判定結果ごとの割合">
+            <div className="total-key-metric">
+              <span>Success</span>
+              <strong className="metric-success">{calculatePercentage(totalSuccess, totalRolls)}</strong>
+              <small>{totalSuccess} rolls</small>
+            </div>
+            <div className="total-key-metric">
+              <span>Failure</span>
+              <strong className="metric-failure">{calculatePercentage(totalFailure, totalRolls)}</strong>
+              <small>{totalFailure} rolls</small>
+            </div>
+            <div className="total-key-metric">
+              <span>SANC</span>
+              <strong>{calculatePercentage(totalStats.sanSuccess, totalSanRolls)}</strong>
+              <small>{totalSanRolls} rolls</small>
+            </div>
+          </div>
         </div>
 
-        <ScrollContainer>
-          {activeStats.map(([charName, stat]) => (
-            <StatCard key={charName} charName={charName} stat={stat} entries={charLogs[charName] ?? []} />
-          ))}
-        </ScrollContainer>
+        {selectedEntry ? (
+          <div className="dashboard-workbench">
+            <section className="character-list-panel" aria-label="キャラクター一覧">
+              <div className="panel-header">
+                <div>
+                  <span className="panel-eyebrow">Characters</span>
+                  <h2>キャラクター一覧</h2>
+                </div>
+                <span className="panel-count">{sortedActiveStats.length}件</span>
+              </div>
+              <div className="character-table" role="table" aria-label="キャラクター別ダイス集計">
+                <div className="character-table-body">
+                  <div className="character-table-header" role="row">
+                    <button
+                      className={`character-sort-button ${characterSort.key === 'character' ? 'active' : ''}`}
+                      type="button"
+                      onClick={() => changeCharacterSort('character')}
+                      aria-label={`キャラクター名で${characterSort.key === 'character' && characterSort.direction === 'asc' ? '降順' : '昇順'}に並び替え`}
+                    >
+                      <span>キャラクター</span>
+                      {characterSort.key === 'character' && <span className="sort-indicator">{characterSort.direction === 'asc' ? '↑' : '↓'}</span>}
+                    </button>
+                    <button
+                      className={`character-sort-button numeric ${characterSort.key === 'rolls' ? 'active' : ''}`}
+                      type="button"
+                      onClick={() => changeCharacterSort('rolls')}
+                      aria-label={`ロール数で${characterSort.key === 'rolls' && characterSort.direction === 'desc' ? '昇順' : '降順'}に並び替え`}
+                    >
+                      <span>Rolls</span>
+                      {characterSort.key === 'rolls' && <span className="sort-indicator">{characterSort.direction === 'asc' ? '↑' : '↓'}</span>}
+                    </button>
+                    {RESULT_LABELS.map(({ label, key }) => (
+                      <button
+                        key={key}
+                        className={`character-sort-button numeric ${characterSort.key === key ? 'active' : ''}`}
+                        type="button"
+                        onClick={() => changeCharacterSort(key)}
+                        aria-label={`${label}率で${characterSort.key === key && characterSort.direction === 'desc' ? '昇順' : '降順'}に並び替え`}
+                      >
+                        <span>{label}</span>
+                        {characterSort.key === key && <span className="sort-indicator">{characterSort.direction === 'asc' ? '↑' : '↓'}</span>}
+                      </button>
+                    ))}
+                  </div>
+                  {sortedActiveStats.map(([charName, stat]) => {
+                    const rollTotal = getNormalRollTotal(stat);
+                    const isSelected = selectedEntry[0] === charName;
+
+                    return (
+                      <button
+                        key={charName}
+                        className={`character-table-row ${isSelected ? 'selected' : ''}`}
+                        type="button"
+                        onClick={() => setSelectedCharacter(charName)}
+                        role="row"
+                        aria-pressed={isSelected}
+                      >
+                        <span className="character-cell-name" title={charName}>
+                          {charName}
+                        </span>
+                        <span>{rollTotal}</span>
+                        {RESULT_LABELS.map(({ key, color }) => (
+                          <span key={key} style={{ color }}>{calculatePercentage(stat[key], rollTotal)}</span>
+                        ))}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </section>
+
+            <section className="detail-panel" aria-label="選択キャラクター詳細">
+              <StatCard charName={selectedEntry[0]} stat={selectedEntry[1]} entries={charLogs[selectedEntry[0]] ?? []} sanHistory={sanHistory[selectedEntry[0]]} />
+            </section>
+          </div>
+        ) : (
+          <div className="empty-state">表示対象のキャラクターがありません。</div>
+        )}
       </div>
     );
   };
@@ -454,10 +639,9 @@ function App() {
   const renderGrowthChecker = () => (
     <div className="dashboard" style={{ alignItems: 'center' }}>
       <ScrollContainer>
-        {Object.entries(growthStats)
-          .filter(([charName]) => !excludedCharacters.has(charName))
-          .map(([charName, skillsSet]) => (
-            <GrowthCard key={charName} charName={charName} skills={Array.from(skillsSet)} />
+        {sortCharacterNamesByRollCount(Object.keys(growthStats).filter((charName) => !excludedCharacters.has(charName)), stats)
+          .map((charName) => (
+            <GrowthCard key={charName} charName={charName} skills={Array.from(growthStats[charName])} />
           ))}
       </ScrollContainer>
     </div>
@@ -466,9 +650,9 @@ function App() {
   const renderLogViewer = () => (
     <div className="dashboard">
       <ScrollContainer>
-        {Object.entries(charLogs)
-          .filter(([charName]) => !excludedCharacters.has(charName))
-          .map(([charName, entries]) => {
+        {sortCharacterNamesByRollCount(Object.keys(charLogs).filter((charName) => !excludedCharacters.has(charName)), stats)
+          .map((charName) => {
+            const entries = charLogs[charName];
             const sanCount = entries.filter((entry) => entry.isSan).length;
             const normalCount = entries.length - sanCount;
 
@@ -564,28 +748,6 @@ function App() {
               </div>
             )}
 
-            <div className="filter-container character-filter">
-              <span className="filter-label">表示キャラクター:</span>
-              <div className="filter-options character-options">
-                <button className="filter-action-btn" onClick={() => setExcludedCharacters(new Set())}>
-                  全選択
-                </button>
-                <button className="filter-action-btn" onClick={() => setExcludedCharacters(new Set(Object.keys(stats)))}>
-                  全解除
-                </button>
-                {Object.keys(stats)
-                  .sort()
-                  .map((charName) => {
-                    const isExcluded = excludedCharacters.has(charName);
-                    return (
-                      <label key={charName} className={`filter-chip ${isExcluded ? 'excluded' : 'included'}`}>
-                        <input type="checkbox" checked={!isExcluded} onChange={() => toggleCharacterFilter(charName)} />
-                        {charName}
-                      </label>
-                    );
-                  })}
-              </div>
-            </div>
           </div>
         )}
 
@@ -617,9 +779,40 @@ function App() {
           </div>
         )}
 
-        {hasStats && activeTab === 'stats' && renderStatsDashboard()}
-        {hasStats && activeTab === 'growth' && renderGrowthChecker()}
-        {hasStats && activeTab === 'log' && renderLogViewer()}
+        {hasStats && (
+          <div className="analysis-layout">
+            <aside className="character-filter-sidebar" aria-label="表示キャラクターフィルター">
+              <div className="sidebar-header">
+                <div>
+                  <span className="panel-eyebrow">Character Filter</span>
+                  <h2>表示キャラクター</h2>
+                </div>
+                <span className="panel-count">{activeStats.length}/{sortedCharacterNames.length}</span>
+              </div>
+              <div className="sidebar-actions">
+                <button className="filter-action-btn" onClick={() => setExcludedCharacters(new Set())}>全選択</button>
+                <button className="filter-action-btn" onClick={() => setExcludedCharacters(new Set(Object.keys(stats)))}>全解除</button>
+              </div>
+              <div className="character-filter-list">
+                {sortedCharacterNames.map((charName) => {
+                  const isExcluded = excludedCharacters.has(charName);
+                  return (
+                    <label key={charName} className={`character-filter-option ${isExcluded ? 'excluded' : 'included'}`}>
+                      <input type="checkbox" checked={!isExcluded} onChange={() => toggleCharacterFilter(charName)} />
+                      <span className="character-filter-name" title={charName}>{charName}</span>
+                      <span className="character-filter-rolls">{getNormalRollTotal(stats[charName])}</span>
+                    </label>
+                  );
+                })}
+              </div>
+            </aside>
+            <div className="analysis-content">
+              {activeTab === 'stats' && renderStatsDashboard()}
+              {activeTab === 'growth' && renderGrowthChecker()}
+              {activeTab === 'log' && renderLogViewer()}
+            </div>
+          </div>
+        )}
 
         {!hasStats && fileName && <div className="empty-state">対象となるダイスログが見つかりませんでした。</div>}
       </main>

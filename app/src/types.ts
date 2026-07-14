@@ -34,10 +34,18 @@ export type LogEntry = {
 
 export type CharLogs = Record<string, LogEntry[]>;
 
+export type SanChange = {
+  from: number;
+  to: number;
+};
+
+export type SanHistory = Record<string, SanChange[]>;
+
 export type ParsedLog = {
   stats: UserStats;
   growthStats: GrowthStats;
   charLogs: CharLogs;
+  sanHistory: SanHistory;
   availableTabs: string[];
 };
 

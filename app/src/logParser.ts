@@ -1,4 +1,4 @@
-import type { AnalysisOptions, CharLogs, DiceResult, GrowthStats, ParsedLog, RollOutcome, UserStats } from './types';
+import type { AnalysisOptions, CharLogs, DiceResult, GrowthStats, ParsedLog, RollOutcome, SanHistory, UserStats } from './types';
 
 const SUCCESS_RESULTS: RollOutcome[] = [
   'クリティカル',
@@ -103,6 +103,7 @@ export const parseDiceLog = (htmlContent: string, options: AnalysisOptions): Par
   const stats: UserStats = {};
   const growthStats: GrowthStats = {};
   const charLogs: CharLogs = {};
+  const sanHistory: SanHistory = {};
   const tabs = new Set<string>();
 
   doc.querySelectorAll('p').forEach((paragraph) => {
@@ -115,6 +116,13 @@ export const parseDiceLog = (htmlContent: string, options: AnalysisOptions): Par
 
     const charName = spans[1].textContent?.trim() ?? '';
     const text = spans[2].textContent?.trim() ?? '';
+
+    const sanChange = text.match(/^\[\s*(.+?)\s*\]\s*SAN\s*:\s*(\d+)\s*→\s*(\d+)\s*$/i);
+    if (sanChange) {
+      const [, sanCharacterName, from, to] = sanChange;
+      sanHistory[sanCharacterName] ??= [];
+      sanHistory[sanCharacterName].push({ from: Number(from), to: Number(to) });
+    }
 
     splitContinuousRolls(text).forEach(({ text: rollText, index }) => {
       const isDiceRoll = /(s?CC(?:\d+|-?\d*)?<=|1[dD]100<=)/i.test(rollText);
@@ -153,6 +161,7 @@ export const parseDiceLog = (htmlContent: string, options: AnalysisOptions): Par
     stats,
     growthStats,
     charLogs,
+    sanHistory,
     availableTabs: Array.from(tabs),
   };
 };
